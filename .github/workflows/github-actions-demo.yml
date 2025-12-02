@@ -23,8 +23,9 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Test with Gradle
-        run: ./gradlew test
+# CI/CD 처리시간 줄이기 위해 생략
+#      - name: Test with Gradle
+#        run: ./gradlew test
 
       # 4. Gradle로 빌드 및 테스트 실행
       - name: Build with Gradle
