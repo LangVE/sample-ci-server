@@ -44,6 +44,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "build/libs/${{ steps.find_jar.outputs.filename }}"
           target: /home/${{ secrets.EC2_USERNAME }}
+          strip_components: 2
 
       # 7. EC2에서 애플리케이션 배포 (ssh)
       - name: Deploy on EC2
