@@ -1,4 +1,4 @@
-name: Java CI/CD with Gradle to AWS EC2
+name: Java CI/CD with Gradle and Docker to AWS EC2
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     steps:
       # 1. 소스 코드 체크아웃
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       # 2. JDK 17 설정
       - name: Set up JDK 17
@@ -23,43 +23,55 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-# CI/CD 처리시간 줄이기 위해 생략
-#      - name: Test with Gradle
-#        run: ./gradlew test
-
-      # 4. Gradle로 빌드 및 테스트 실행
+      # 4. Gradle로 빌드
       - name: Build with Gradle
         run: ./gradlew build --no-daemon
 
-      # 5. 빌드된 JAR 파일 이름 찾기
-      - name: Find JAR file name
-        id: find_jar
-        run: echo "filename=$(basename $(find build/libs -name 'sample-ci-server-*.jar'))" >> $GITHUB_OUTPUT
-
-      # 6. EC2로 JAR 파일 복사 (scp)
-      - name: Copy JAR to EC2
-        uses: appleboy/scp-action@master
+      # 5. AWS 자격 증명 설정
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "build/libs/${{ steps.find_jar.outputs.filename }}"
-          target: /home/${{ secrets.EC2_USERNAME }}
-          strip_components: 2
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # 7. EC2에서 애플리케이션 배포 (ssh)
+      # 6. Amazon ECR 로그인
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 7. Docker 이미지 빌드 및 ECR 푸시
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 8. EC2에서 Docker 컨테이너 배포
       - name: Deploy on EC2
         uses: appleboy/ssh-action@master
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION
           script: |
-            JAR_FILE=${{ steps.find_jar.outputs.filename }}
+            # ECR 로그인 (EC2에 AWS CLI 및 권한 필요)
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
             
-            # 기존 프로세스 종료
-            pkill -f "java -jar $JAR_FILE" || true
+            # 기존 컨테이너 중지 및 삭제
+            docker stop sample-ci-server || true
+            docker rm sample-ci-server || true
             
-            # 새 프로세스를 백그라운드에서 시작
-            cd /home/${{ secrets.EC2_USERNAME }}
-            nohup java -jar $JAR_FILE > app.log 2>&1 &
+            # 최신 이미지 pull
+            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:latest
+            
+            # 컨테이너 실행
+            docker run -d --name sample-ci-server -p 8080:8080 $ECR_REGISTRY/$ECR_REPOSITORY:latest
