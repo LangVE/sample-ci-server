@@ -8,6 +8,6 @@ public class HelloController {
 
     @GetMapping("/api/hello")
     public String hello() {
-        return "Hello, YH!";
+        return "Hello, YH! container running in EC2!!";
     }
 }
